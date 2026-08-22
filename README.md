@@ -1,56 +1,176 @@
-# Welcome to your Expo app 👋
+# Nutri *(codename)*
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App di tracciamento calorie e macro con riconoscimento fotografico.
 
-## Get started
+Posizionamento, decisioni di prodotto e roadmap stanno in **[BRIEF.md](./BRIEF.md)**.
+Leggilo prima di toccare il codice: diverse scelte qui sotto sembrano arbitrarie
+e non lo sono.
 
-1. Install dependencies
+**Stato:** fase 0 — fondamenta.
+App Expo inizializzata, schema e logica nutrizionale pronti, **migration non
+ancora applicate**.
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Start the app
+## Ambiente
 
-   ```bash
-   npx expo start
-   ```
+| | |
+|---|---|
+| Expo SDK | 57.0.15 · React Native 0.86.2 · React 19.2.3 |
+| Router | expo-router, rotte tipizzate, `src/app/` |
+| EAS | `@davimarr/nutri` · `cf67d1bf-6289-417e-aecc-e735381a8312` |
+| Supabase | progetto **Nutri** · `iuiskyzvuevquisjhblm` · **eu-west-1 (Irlanda)** |
+| Alias TS | `@/*` → `./src/*` |
 
-In the output, you'll find options to open the app in a
+La regione Supabase è dentro l'UE: requisito soddisfatto per i dati sanitari
+ex art. 9 GDPR (§9 del brief). **Non è modificabile dopo la creazione.**
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## Struttura
 
-## Get a fresh project
+```
+src/
+  app/                  rotte expo-router
+  components/           UI
+  domain/nutrition/     logica pura, 30 test verdi — nessuna dipendenza
+    types.ts            tipi condivisi
+    energy.ts           Mifflin-St Jeor, Katch-McArdle, fattori attività
+    targets.ts          target calorici, guardrail, ripartizione macro
+    calibration.ts      correttivo combinato dal trend di peso
+  lib/supabase.ts       client Supabase
 
-When you're ready, run:
-
-```bash
-npm run reset-project
+supabase/migrations/
+  0000_extensions.sql   pg_trgm, pgcrypto
+  0001_odbl_schema.sql  zona ODbL — alimenti, prodotti, densità, porzioni
+  0002_app_schema.sql   zona proprietaria — profilo, diario, calibrazione
+  0003_rls.sql          Row Level Security, export GDPR, vista totali
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+---
 
-### Other setup steps
+## Cosa manca per far girare tutto
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+### 1. Dipendenze runtime
 
-## Learn more
+```bash
+npx expo install @supabase/supabase-js @react-native-async-storage/async-storage react-native-url-polyfill
+npm install
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+`src/lib/supabase.ts` importa già questi tre pacchetti e senza di essi non
+compila.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### 2. Variabili d'ambiente
 
-## Join the community
+```bash
+cp .env.example .env
+```
 
-Join our community of developers creating universal apps.
+`GEMINI_API_KEY` **non** va prefissata con `EXPO_PUBLIC_`: quel prefisso la
+includerebbe nel bundle, dove chiunque può estrarla. Le chiamate a Gemini
+passano da edge function.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+### 3. Migration
+
+```bash
+npx supabase link --project-ref iuiskyzvuevquisjhblm
+npx supabase db push
+```
+
+### 4. Esporre lo schema `odbl`
+
+Dashboard → Settings → API → **Exposed schemas** → aggiungi `odbl`.
+
+Senza questo passaggio ogni query verso alimenti e prodotti risponde 404.
+
+### 5. Collegare GitHub
+
+Il repo locale non ha ancora un remote:
+
+```bash
+git remote add origin https://github.com/<utente>/<repo>.git
+git push -u origin master
+```
+
+---
+
+## Test
+
+```bash
+npm test
+```
+
+---
+
+## Le tre regole da non violare
+
+Il resto del codice si può rifare. Queste no: sbagliarle produce danni che si
+scoprono tardi e si riparano solo con una migrazione.
+
+### 1. I macro non escono mai da un LLM
+
+L'LLM identifica l'alimento e stima la quantità. I valori nutrizionali vengono
+**sempre** da `odbl.foods` o `odbl.products`.
+
+Un macro allucinato non è distinguibile da uno corretto — non a runtime, non in
+review. È l'unico errore di questo progetto davvero irreparabile.
+
+### 2. Il confine ODbL non si attraversa
+
+`odbl` contiene dati sotto Open Database License: attribuzione obbligatoria e
+share-alike sul database derivato. `public` contiene dati utente e non è
+soggetto a nulla di ciò.
+
+Due schemi Postgres distinti rendono la conformità un comando solo:
+
+```bash
+pg_dump --schema=odbl > odbl-derivative.sql
+```
+
+Per questo `meal_items` **copia** i valori nutrizionali invece di referenziarli.
+Due motivi validi ciascuno da solo: una voce di diario di tre mesi fa non deve
+cambiare perché qualcuno ha corretto il prodotto su OFF, e il diario non deve
+diventare un database derivato da OFF.
+
+### 3. I guardrail non sono configurabili
+
+`ABSOLUTE_KCAL_FLOOR`, `MAX_LOSS_RATE_KG_WEEK`, il floor sul metabolismo basale
+e `hide_calories` non devono diventare impostazioni utente, feature flag o
+parametri remoti.
+
+Sono la differenza fra un'app che misura e un'app che fa danni, e sono anche ciò
+che tiene il progetto dentro le policy degli store.
+
+---
+
+## Sul fattore di calibrazione
+
+`computeCalibration()` restituisce **un solo numero combinato**, e non è un
+limite dell'implementazione: è matematica.
+
+```
+variazione peso = intake reale − TDEE reale
+```
+
+Osserviamo l'intake *loggato* (distorto) e la variazione di peso. Una equazione,
+due incognite: l'errore di logging e l'errore sul TDEE **non sono separabili**.
+
+A scopo predittivo il fattore combinato funziona perfettamente — è tutto ciò che
+serve per impostare un target che porti al risultato voluto. Ma non mostrare mai
+all'utente "il tuo TDEE è X" o "sottostimi del Y%" come affermazioni separate:
+sarebbero numeri inventati.
+
+Una separazione parziale sarà possibile più avanti, regredendo i giorni a
+logging prevalentemente barcode (bias ≈ 0) contro quelli a logging fotografico.
+La vista `daily_totals` espone già `precise_count` e `photo_count` a questo
+scopo.
+
+---
+
+## Attribuzione
+
+Questo progetto usa dati di [Open Food Facts](https://openfoodfacts.org)
+(ODbL v1.0) e le [Tabelle di composizione degli alimenti CREA](https://www.alimentinutrizione.it).
+L'attribuzione deve restare visibile in app: è un obbligo di licenza, non una
+cortesia.

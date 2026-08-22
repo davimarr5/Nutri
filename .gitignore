@@ -41,3 +41,15 @@ example
 # generated native folders
 /ios
 /android
+
+# Segreti — ATTENZIONE: ".env*.local" sopra NON copre ".env".
+# Senza queste righe la chiave Supabase finisce su GitHub al primo commit.
+.env
+.env.local
+.env.development
+.env.production
+
+# Supabase CLI
+supabase/.branches
+supabase/.temp
+.supabase/
